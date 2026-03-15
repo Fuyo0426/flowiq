@@ -18,7 +18,7 @@ import {
 import AppNav from '@/components/AppNav'
 import {
   getStoredAuth, clearAuth, fetchSignals, fetchStocks,
-  type SignalRow, fmt, fmtPct, fmtZ,
+  type SignalRow, fmt, fmtPct, fmtZ, ApiError,
 } from '@/lib/api'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -419,6 +419,7 @@ export default function SignalsPage() {
   const [stockNames, setStockNames] = useState<Record<string, string>>({})
   const [date, setDate] = useState('')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   // Filters
   const [typeFilter, setTypeFilter] = useState<SignalTypeFilter>('all')
@@ -449,9 +450,12 @@ export default function SignalsPage() {
         setDate(sigRes.date)
         setStockNames(stocks)
       })
-      .catch(() => {
-        clearAuth()
-        router.push('/')
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) {
+          clearAuth(); router.push('/')
+        } else {
+          setError('資料載入失敗，請確認後端服務是否正常')
+        }
       })
       .finally(() => setLoading(false))
   }, [auth, router])
@@ -550,6 +554,10 @@ export default function SignalsPage() {
                 {Array.from({ length: 8 }).map((_, i) => (
                   <SkeletonCard key={i} />
                 ))}
+              </div>
+            ) : error ? (
+              <div className="bg-red-50 border border-red-200/60 rounded-2xl px-5 py-4 text-sm text-red-600">
+                {error}
               </div>
             ) : filtered.length === 0 ? (
               <EmptyState />

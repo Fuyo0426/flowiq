@@ -10,7 +10,7 @@ import {
 } from 'recharts'
 import {
   getStoredAuth, clearAuth, fetchSignals,
-  type SignalRow, fmtPct, fmtZ,
+  type SignalRow, fmtPct, fmtZ, ApiError,
 } from '@/lib/api'
 import AppNav from '@/components/AppNav'
 
@@ -43,6 +43,7 @@ export default function PerformancePage() {
   const [signals, setSignals] = useState<SignalRow[]>([])
   const [signalDate, setSignalDate] = useState('')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
@@ -60,7 +61,13 @@ export default function PerformancePage() {
         setSignals(res.data)
         setSignalDate(res.date)
       })
-      .catch(() => { clearAuth(); router.push('/') })
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) {
+          clearAuth(); router.push('/')
+        } else {
+          setError('資料載入失敗，請確認後端服務是否正常')
+        }
+      })
       .finally(() => setLoading(false))
   }, [auth, router])
 
@@ -150,6 +157,10 @@ export default function PerformancePage() {
         {loading ? (
           <div className="flex items-center justify-center py-32">
             <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="bg-red-50 border border-red-200/60 rounded-2xl px-5 py-4 text-sm text-red-600">
+            {error}
           </div>
         ) : (
           <>

@@ -22,11 +22,17 @@ export function clearAuth() {
   sessionStorage.removeItem('fiq_pass')
 }
 
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+  }
+}
+
 async function apiFetch(path: string, auth: { user: string; pass: string }) {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { Authorization: getAuthHeader(auth.user, auth.pass) },
   })
-  if (!res.ok) throw new Error(`API ${res.status}`)
+  if (!res.ok) throw new ApiError(res.status, `API ${res.status}`)
   return res.json()
 }
 
