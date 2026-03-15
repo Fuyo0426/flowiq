@@ -5,7 +5,7 @@ FlowIQ — 台股籌碼分析平台 — FastAPI 後端
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
-import secrets, os
+import secrets, os, math
 from datetime import date
 
 app = FastAPI(title="FlowIQ — 台股籌碼分析平台", version="0.1.0")
@@ -193,3 +193,184 @@ def get_summary(
 def get_dates(user: str = Depends(auth), db=Depends(get_db)):
     rows = run_query(db, "SELECT DISTINCT date FROM chip_daily ORDER BY date DESC")
     return [r["date"] for r in rows]
+
+
+@app.get("/api/stocks")
+def get_stocks(user: str = Depends(auth), db=Depends(get_db)):
+    """回傳 {stock_id: name} 對照表"""
+    rows = run_query(db, "SELECT stock_id, name FROM stocks")
+    return {r["stock_id"]: r["name"] for r in rows}
+
+
+@app.get("/api/signals")
+def get_signals(
+    top: int = 50,
+    user: str = Depends(auth),
+    db=Depends(get_db),
+):
+    """T2 訊號排行 — Z-score 異常偵測 + 法人一致性加權"""
+    latest = run_scalar(db, "SELECT MAX(date) FROM chip_daily")
+    if not latest:
+        return {"date": None, "data": []}
+
+    latest_rows = run_query(db, """
+        SELECT stock_id, foreign_net, trust_net, dealer_net, inst_net,
+               close_price, margin_balance, short_balance
+        FROM chip_daily WHERE date = ?
+    """, [latest])
+
+    results = []
+    for row in latest_rows:
+        sid = row["stock_id"]
+        hist = run_query(db, """
+            SELECT date, foreign_net, close_price
+            FROM chip_daily WHERE stock_id = ?
+            ORDER BY date ASC
+        """, [sid])
+
+        if len(hist) < 2:
+            continue
+
+        hist_vals = [h["foreign_net"] for h in hist[:-1]]
+        mean_f = sum(hist_vals) / len(hist_vals)
+        variance = sum((x - mean_f) ** 2 for x in hist_vals) / len(hist_vals)
+        std_f = variance ** 0.5
+        z_score = (row["foreign_net"] - mean_f) / std_f if std_f > 0 else 0.0
+
+        consec_buy = 0
+        for h in reversed(hist):
+            if h["foreign_net"] > 0:
+                consec_buy += 1
+            else:
+                break
+
+        consec_sell = 0
+        for h in reversed(hist):
+            if h["foreign_net"] < 0:
+                consec_sell += 1
+            else:
+                break
+
+        last5 = hist[-5:] if len(hist) >= 5 else hist
+        cum5 = sum(h["foreign_net"] for h in last5)
+
+        prices = [h["close_price"] for h in hist if h["close_price"] is not None and h["close_price"] > 0]
+        pct5 = 0.0
+        if len(prices) >= 2:
+            base = prices[-min(6, len(prices))]
+            if base > 0:
+                pct5 = (prices[-1] - base) / base * 100
+
+        three_same = row["foreign_net"] > 0 and row["trust_net"] > 0 and row["dealer_net"] > 0
+
+        base_score = consec_buy * math.log(max(abs(cum5), 1)) * (1 - pct5 / 100)
+        z_mult = 1.5 if z_score > 2 else (1.25 if z_score > 1 else 1.0)
+        cons_mult = 1.3 if three_same else 1.0
+        score = base_score * z_mult * cons_mult
+
+        if three_same and z_score > 1.5:
+            signal_type = "triple_arrow"
+        elif z_score > 2 and pct5 < 3 and consec_buy >= 2:
+            signal_type = "stealth_entry"
+        elif row["foreign_net"] > 0 and row["trust_net"] > 0:
+            signal_type = "trust_push"
+        elif pct5 > 10 and row["margin_balance"] > 0:
+            signal_type = "retail_chase"
+        else:
+            signal_type = "normal"
+
+        if consec_buy >= 5 or z_score > 2:
+            light = "red"
+        elif consec_buy >= 3 or z_score > 1:
+            light = "yellow"
+        else:
+            light = "gray"
+
+        results.append({
+            "stock_id": sid,
+            "score": round(score, 2),
+            "z_score": round(z_score, 2),
+            "foreign_net": row["foreign_net"],
+            "trust_net": row["trust_net"],
+            "dealer_net": row["dealer_net"],
+            "inst_net": row["inst_net"],
+            "close_price": row["close_price"],
+            "consec_buy": consec_buy,
+            "consec_sell": consec_sell,
+            "cum5_foreign": cum5,
+            "pct5": round(pct5, 2),
+            "three_consistent": three_same,
+            "signal_type": signal_type,
+            "light": light,
+        })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return {"date": latest, "data": results[:top]}
+
+
+@app.get("/api/stock/{stock_id}/stats")
+def get_stock_stats(
+    stock_id: str,
+    user: str = Depends(auth),
+    db=Depends(get_db),
+):
+    """T1 個股摘要統計卡"""
+    rows = run_query(db, """
+        SELECT date, foreign_net, trust_net, dealer_net, inst_net,
+               margin_balance, short_balance, close_price
+        FROM chip_daily WHERE stock_id = ?
+        ORDER BY date ASC
+    """, [stock_id])
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="Stock not found")
+
+    consec_buy = 0
+    for r in reversed(rows):
+        if r["foreign_net"] > 0:
+            consec_buy += 1
+        else:
+            break
+
+    consec_sell = 0
+    for r in reversed(rows):
+        if r["foreign_net"] < 0:
+            consec_sell += 1
+        else:
+            break
+
+    last5 = rows[-5:] if len(rows) >= 5 else rows
+    last20 = rows[-20:] if len(rows) >= 20 else rows
+    cum5 = sum(r["foreign_net"] for r in last5)
+    cum20 = sum(r["foreign_net"] for r in last20)
+
+    prices = [r["close_price"] for r in rows if r["close_price"] is not None and r["close_price"] > 0]
+    pct5 = 0.0
+    if len(prices) >= 2:
+        base = prices[-min(6, len(prices))]
+        if base > 0:
+            pct5 = (prices[-1] - base) / base * 100
+
+    hist_vals = [r["foreign_net"] for r in rows[:-1]] if len(rows) > 1 else []
+    mean_f = sum(hist_vals) / len(hist_vals) if hist_vals else 0.0
+    variance = sum((x - mean_f) ** 2 for x in hist_vals) / len(hist_vals) if hist_vals else 0.0
+    std_f = variance ** 0.5
+    today_f = rows[-1]["foreign_net"] if rows else 0
+    z_score = (today_f - mean_f) / std_f if std_f > 0 else 0.0
+
+    latest = rows[-1]
+    three_same = latest["foreign_net"] > 0 and latest["trust_net"] > 0 and latest["dealer_net"] > 0
+
+    return {
+        "stock_id": stock_id,
+        "latest_date": rows[-1]["date"],
+        "latest_price": prices[-1] if prices else None,
+        "consec_buy": consec_buy,
+        "consec_sell": consec_sell,
+        "cum5_foreign": cum5,
+        "cum20_foreign": cum20,
+        "pct5": round(pct5, 2),
+        "z_score": round(z_score, 2),
+        "three_consistent": three_same,
+        "total_days": len(rows),
+    }

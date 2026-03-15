@@ -2,18 +2,20 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer, Cell,
 } from 'recharts'
 import {
-  getStoredAuth, clearAuth, fetchSummary, fetchChip,
-  type ChipRow, fmt, fmtNum,
+  getStoredAuth, clearAuth, fetchSummary, fetchChip, fetchStocks,
+  type ChipRow, fmt,
 } from '@/lib/api'
+import AppNav from '@/components/AppNav'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function NetBadge({ value }: { value: number | null | undefined }) {
-  if (value == null) return <span className="num text-xs text-zinc-300">—</span>
+  if (value == null) return <span className="num text-xs text-zinc-300">{'\u2014'}</span>
   const pos = value >= 0
   return (
     <span className={`num text-xs font-medium px-1.5 py-0.5 rounded ${pos ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
@@ -25,11 +27,12 @@ function NetBadge({ value }: { value: number | null | undefined }) {
 function SkelRow() {
   return (
     <div className="flex items-center gap-4 py-3 border-b border-zinc-100 animate-pulse">
-      <div className="w-12 h-4 bg-zinc-200 rounded" />
+      <div className="w-20 h-4 bg-zinc-200 rounded" />
       <div className="flex-1 h-4 bg-zinc-100 rounded" />
       <div className="w-16 h-4 bg-zinc-200 rounded" />
       <div className="w-16 h-4 bg-zinc-100 rounded" />
       <div className="w-16 h-4 bg-zinc-200 rounded" />
+      <div className="w-14 h-4 bg-zinc-100 rounded" />
     </div>
   )
 }
@@ -45,6 +48,7 @@ export default function DashboardPage() {
   const [loadingSummary, setLoadingSummary] = useState(true)
   const [loadingDetail, setLoadingDetail] = useState(false)
   const [search, setSearch] = useState('')
+  const [stockNames, setStockNames] = useState<Record<string, string>>({})
 
   useEffect(() => {
     const stored = getStoredAuth()
@@ -54,11 +58,16 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!auth) return
+
     setLoadingSummary(true)
     fetchSummary(auth, 50)
       .then(res => { setSummary(res.data); setSummaryDate(res.date) })
       .catch(() => { clearAuth(); router.push('/') })
       .finally(() => setLoadingSummary(false))
+
+    fetchStocks(auth)
+      .then(names => setStockNames(names))
+      .catch(() => {})
   }, [auth, router])
 
   const loadDetail = useCallback(async (stockId: string) => {
@@ -67,7 +76,7 @@ export default function DashboardPage() {
     setLoadingDetail(true)
     try {
       const rows = await fetchChip(auth, stockId, 20)
-      setDetail(rows.reverse()) // oldest first for chart
+      setDetail(rows.reverse())
     } finally {
       setLoadingDetail(false)
     }
@@ -75,8 +84,12 @@ export default function DashboardPage() {
 
   function logout() { clearAuth(); router.push('/') }
 
+  function handleSearch(q: string) {
+    setSearch(q)
+  }
+
   const filtered = summary.filter(r =>
-    r.stock_id.includes(search) || search === ''
+    search === '' || r.stock_id.includes(search) || (stockNames[r.stock_id] || '').includes(search)
   )
 
   const chartData = detail.map(r => ({
@@ -89,28 +102,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-[100dvh] bg-[#f9fafb]">
-      {/* Nav */}
-      <header className="bg-white border-b border-zinc-200 sticky top-0 z-10">
-        <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-md bg-blue-600 flex items-center justify-center">
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                <path d="M2 12 L6 7 L9 10 L14 4" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </div>
-            <span className="font-semibold tracking-tight text-zinc-900">FlowIQ</span>
-            {summaryDate && (
-              <span className="num text-xs text-zinc-400 ml-2">{summaryDate}</span>
-            )}
-          </div>
-          <button
-            onClick={logout}
-            className="text-sm text-zinc-500 hover:text-zinc-800 transition"
-          >
-            登出
-          </button>
-        </div>
-      </header>
+      <AppNav date={summaryDate} onSearch={handleSearch} onLogout={logout} />
 
       <main className="max-w-[1400px] mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-8">
 
@@ -121,19 +113,12 @@ export default function DashboardPage() {
               <h2 className="font-semibold text-zinc-900 tracking-tight">三大法人買超排行</h2>
               <p className="text-xs text-zinc-500 mt-0.5">點擊個股查看籌碼趨勢</p>
             </div>
-            <input
-              type="text"
-              placeholder="搜尋代號..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="num text-sm px-3 py-1.5 rounded-lg border border-zinc-200 bg-white outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 w-32 transition"
-            />
           </div>
 
           <div className="bg-white rounded-2xl border border-zinc-200/60 overflow-hidden shadow-[0_4px_24px_-8px_rgba(0,0,0,0.06)]">
             {/* Table header */}
-            <div className="grid grid-cols-[60px_1fr_100px_100px_100px] gap-2 px-5 py-2.5 border-b border-zinc-100 bg-zinc-50">
-              {['代號', '三大合計', '外資', '投信', '自營'].map(h => (
+            <div className="grid grid-cols-[minmax(100px,1.2fr)_1fr_1fr_1fr_1fr_70px] gap-2 px-5 py-2.5 border-b border-zinc-100 bg-zinc-50">
+              {['代號+名稱', '三大合計', '外資', '投信', '自營', '操作'].map(h => (
                 <span key={h} className="text-xs font-medium text-zinc-500">{h}</span>
               ))}
             </div>
@@ -149,13 +134,25 @@ export default function DashboardPage() {
                       animate={{ opacity: 1 }}
                       transition={{ delay: i * 0.02 }}
                       onClick={() => loadDetail(row.stock_id)}
-                      className={`grid grid-cols-[60px_1fr_100px_100px_100px] gap-2 px-5 py-3 border-b border-zinc-100 cursor-pointer hover:bg-blue-50/60 transition ${selected === row.stock_id ? 'bg-blue-50' : ''}`}
+                      className={`grid grid-cols-[minmax(100px,1.2fr)_1fr_1fr_1fr_1fr_70px] gap-2 px-5 py-3 border-b border-zinc-100 cursor-pointer hover:bg-blue-50/60 transition ${selected === row.stock_id ? 'bg-blue-50' : ''}`}
                     >
-                      <span className="num text-sm font-medium text-zinc-700">{row.stock_id}</span>
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        <span className="num text-sm font-medium text-zinc-700">{row.stock_id}</span>
+                        {stockNames[row.stock_id] && (
+                          <span className="text-xs text-zinc-400 truncate">{stockNames[row.stock_id]}</span>
+                        )}
+                      </span>
                       <NetBadge value={row.inst_net} />
                       <NetBadge value={row.foreign_net} />
                       <NetBadge value={row.trust_net} />
                       <NetBadge value={row.dealer_net} />
+                      <Link
+                        href={`/stock/${row.stock_id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-xs px-2 py-1 rounded-md bg-zinc-100 text-zinc-600 hover:bg-blue-50 hover:text-blue-600 transition text-center whitespace-nowrap"
+                      >
+                        深度分析
+                      </Link>
                     </motion.div>
                   ))}
                 </AnimatePresence>
@@ -171,7 +168,12 @@ export default function DashboardPage() {
             {selected ? (
               <>
                 <div className="flex items-baseline justify-between mb-1">
-                  <span className="num text-2xl font-bold text-zinc-900 tracking-tight">{selected}</span>
+                  <div className="flex items-baseline gap-2">
+                    <span className="num text-2xl font-bold text-zinc-900 tracking-tight">{selected}</span>
+                    {stockNames[selected] && (
+                      <span className="text-sm text-zinc-500">{stockNames[selected]}</span>
+                    )}
+                  </div>
                   {detail[detail.length - 1]?.close_price && (
                     <span className="num text-lg text-zinc-600">
                       NT$ {detail[detail.length - 1].close_price?.toFixed(1)}
