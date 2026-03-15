@@ -14,8 +14,23 @@ app = FastAPI(title="FlowIQ — 台股籌碼分析平台", version="0.1.0")
 @app.on_event("startup")
 def startup():
     """啟動時自動建立資料表"""
-    from db.schema import init_db
-    init_db()
+    import logging
+    try:
+        from db.schema import init_db
+        init_db()
+    except Exception as e:
+        logging.error(f"[startup] init_db failed: {e}")
+
+
+@app.get("/admin/init-db")
+def admin_init_db():
+    """手動觸發建表（一次性使用）"""
+    try:
+        from db.schema import init_db
+        init_db()
+        return {"status": "ok"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
 
 app.add_middleware(
