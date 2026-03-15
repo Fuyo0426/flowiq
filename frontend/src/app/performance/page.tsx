@@ -9,7 +9,7 @@ import {
   AreaChart, Area, ReferenceLine,
 } from 'recharts'
 import {
-  getStoredAuth, clearAuth, fetchSignals,
+  getStoredAuth, clearAuth, fetchSignals, fetchStocks,
   type SignalRow, fmtPct, fmtZ, ApiError,
 } from '@/lib/api'
 import AppNav from '@/components/AppNav'
@@ -46,6 +46,7 @@ export default function PerformancePage() {
   const [error, setError] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [stockNames, setStockNames] = useState<Record<string, string>>({})
 
   useEffect(() => {
     const stored = getStoredAuth()
@@ -56,10 +57,14 @@ export default function PerformancePage() {
   useEffect(() => {
     if (!auth) return
     setLoading(true)
-    fetchSignals(auth, 100)
-      .then(res => {
+    Promise.all([
+      fetchSignals(auth, 100),
+      fetchStocks(auth),
+    ])
+      .then(([res, names]) => {
         setSignals(res.data)
         setSignalDate(res.date)
+        setStockNames(names)
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
@@ -310,7 +315,7 @@ export default function PerformancePage() {
                   <thead>
                     <tr className="border-b border-zinc-100">
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-zinc-500 w-10">#</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-medium text-zinc-500">代號</th>
+                      <th className="px-4 py-2.5 text-left text-xs font-medium text-zinc-500">代號 / 名稱</th>
                       <th className="px-4 py-2.5 text-left text-xs font-medium text-zinc-500">訊號類型</th>
                       <th
                         className="px-4 py-2.5 text-left text-xs font-medium text-zinc-500 cursor-pointer hover:text-zinc-700 select-none"
@@ -353,7 +358,12 @@ export default function PerformancePage() {
                             className={i % 2 === 0 ? 'bg-white' : 'bg-zinc-50/50'}
                           >
                             <td className="num px-4 py-2.5 text-zinc-400 text-xs">{i + 1}</td>
-                            <td className="num px-4 py-2.5 text-zinc-900 font-medium">{s.stock_id}</td>
+                            <td className="px-4 py-2.5">
+                              <span className="num text-zinc-900 font-medium">{s.stock_id}</span>
+                              {stockNames[s.stock_id] && (
+                                <span className="text-xs text-zinc-400 ml-1.5">{stockNames[s.stock_id]}</span>
+                              )}
+                            </td>
                             <td className="px-4 py-2.5">
                               <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-xs font-medium">
                                 {SIGNAL_LABELS[s.signal_type] || s.signal_type}

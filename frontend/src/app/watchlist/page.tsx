@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MagnifyingGlass, X as XIcon } from '@phosphor-icons/react'
 import {
-  getStoredAuth, clearAuth, fetchChip,
+  getStoredAuth, clearAuth, fetchChip, fetchStocks,
   type ChipRow, fmt,
 } from '@/lib/api'
 import AppNav from '@/components/AppNav'
@@ -73,6 +73,7 @@ export default function WatchlistPage() {
   const [auth, setAuth] = useState<{ user: string; pass: string } | null>(null)
   const [watchlist, setWatchlist] = useState<string[]>([])
   const [cards, setCards] = useState<Record<string, WatchCard>>({})
+  const [stockNames, setStockNames] = useState<Record<string, string>>({})
   const [addInput, setAddInput] = useState('')
   const [toast, setToast] = useState('')
 
@@ -88,6 +89,11 @@ export default function WatchlistPage() {
     setAuth(stored)
     setWatchlist(readWatchlist())
   }, [router])
+
+  useEffect(() => {
+    if (!auth) return
+    fetchStocks(auth).then(setStockNames).catch(() => {})
+  }, [auth])
 
   const fetchCardData = useCallback(async (id: string) => {
     if (!auth) return
@@ -234,7 +240,12 @@ export default function WatchlistPage() {
 
                     <Link href={`/stock/${id}`} className="block">
                       <div className="flex items-center justify-between mb-3">
-                        <span className="num text-lg font-bold text-zinc-900">{id}</span>
+                        <div>
+                          <span className="num text-lg font-bold text-zinc-900">{id}</span>
+                          {stockNames[id] && (
+                            <span className="text-sm text-zinc-500 ml-1.5">{stockNames[id]}</span>
+                          )}
+                        </div>
                         {card && !card.loading && (
                           <Sparkline values={card.prices} />
                         )}

@@ -274,7 +274,7 @@ function SignalCard({
 
 // ── Sector Summary Sidebar ────────────────────────────────────────────────────
 
-function SectorSummary({ data }: { data: SignalRow[] }) {
+function SectorSummary({ data, stockNames }: { data: SignalRow[]; stockNames: Record<string, string> }) {
   // Count by signal type
   const typeCounts = useMemo(() => {
     const counts: Record<string, number> = {
@@ -380,6 +380,9 @@ function SectorSummary({ data }: { data: SignalRow[] }) {
           <div className="flex items-center gap-2 mb-2">
             <StrengthDot light={topStock.light} />
             <span className="font-mono font-bold text-lg text-zinc-900">{topStock.stock_id}</span>
+            {stockNames[topStock.stock_id] && (
+              <span className="text-sm text-zinc-500">{stockNames[topStock.stock_id]}</span>
+            )}
             <span className="bg-zinc-900 text-white text-xs font-mono px-2 py-0.5 rounded-md ml-auto">
               {topStock.score}
             </span>
@@ -600,7 +603,7 @@ export default function SignalsPage() {
                 </div>
               </div>
             ) : signals.length > 0 ? (
-              <SectorSummary data={signals} />
+              <SectorSummary data={signals} stockNames={stockNames} />
             ) : null}
           </aside>
         </div>
