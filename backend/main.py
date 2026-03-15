@@ -219,17 +219,32 @@ def get_signals(
         FROM chip_daily WHERE date = ?
     """, [latest])
 
-    results = []
-    for row in latest_rows:
-        sid = row["stock_id"]
-        hist = run_query(db, """
-            SELECT date, foreign_net, close_price
-            FROM chip_daily WHERE stock_id = ?
-            ORDER BY date ASC
-        """, [sid])
+    if not latest_rows:
+        return {"date": latest, "data": []}
 
+    # Single query: fetch ALL historical data at once — eliminates N+1 problem
+    stock_ids = [r["stock_id"] for r in latest_rows]
+    placeholders = ",".join("?" * len(stock_ids))
+    all_hist = run_query(db, f"""
+        SELECT stock_id, date, foreign_net, close_price
+        FROM chip_daily
+        WHERE stock_id IN ({placeholders})
+        ORDER BY stock_id, date ASC
+    """, stock_ids)
+
+    # Group by stock_id in Python
+    from collections import defaultdict
+    hist_map: dict = defaultdict(list)
+    for h in all_hist:
+        hist_map[h["stock_id"]].append(h)
+
+    latest_lookup = {r["stock_id"]: r for r in latest_rows}
+
+    results = []
+    for sid, hist in hist_map.items():
         if len(hist) < 2:
             continue
+        row = latest_lookup[sid]
 
         hist_vals = [h["foreign_net"] for h in hist[:-1]]
         mean_f = sum(hist_vals) / len(hist_vals)
