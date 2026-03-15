@@ -1,5 +1,5 @@
 """
-TPEX 爬蟲 — 上櫃股票收盤價 + 融資融券
+TPEX 爬蟲 — 上櫃股票三大法人 + 收盤價 + 融資融券
 每日 16:30 後執行
 注意：TPEX 日期格式為民國年 115/03/13
 """
@@ -46,6 +46,59 @@ def western_to_roc(trade_date: str) -> str:
     m = trade_date[4:6]
     d = trade_date[6:8]
     return f'{y}/{m}/{d}'
+
+
+def _fetch_big5(url: str) -> dict:
+    """TPEX 部分端點回傳 Big5，需特別處理"""
+    req = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=15, context=SSL_CTX) as r:
+        raw = r.read()
+    try:
+        return json.loads(raw.decode('big5', errors='replace'))
+    except json.JSONDecodeError:
+        return json.loads(raw.decode('utf-8', errors='replace'))
+
+
+def fetch_tpex_institutional(trade_date: str) -> dict:
+    """
+    TPEX 三大法人每日買賣超
+    URL: /web/stock/3insti/daily_trade/3itrade_hedge_result.php
+    欄位：[0]代號 [1]名稱
+          [8]外資買進 [9]外資賣出 [10]外資買賣超（含外資自營商）
+          [11]投信買進 [12]投信賣出 [13]投信買賣超
+          [22]自營商買賣超（含避險）
+          [23]三大法人買賣超合計
+    回傳 {stock_id: {foreign_buy, foreign_sell, foreign_net, trust_buy, trust_sell, trust_net, dealer_net, inst_net}}
+    """
+    roc = western_to_roc(trade_date).replace('/', '%2F')
+    url = f'{BASE}/web/stock/3insti/daily_trade/3itrade_hedge_result.php?l=zh-tw&t=D&d={roc}&response=json'
+    log.info(f'[TPEX 三大法人] {trade_date}')
+    data = _fetch_big5(url)
+
+    result = {}
+    for table in data.get('tables', []):
+        for row in table.get('data', []):
+            if not isinstance(row, list) or len(row) < 24:
+                continue
+            sid = str(row[0]).strip()
+            if not sid:
+                continue
+            try:
+                result[sid] = {
+                    'foreign_buy':  _int(row[8]),
+                    'foreign_sell': _int(row[9]),
+                    'foreign_net':  _int(row[10]),
+                    'trust_buy':    _int(row[11]),
+                    'trust_sell':   _int(row[12]),
+                    'trust_net':    _int(row[13]),
+                    'dealer_net':   _int(row[22]),
+                    'inst_net':     _int(row[23]),
+                }
+            except (IndexError, Exception):
+                continue
+
+    log.info(f'  TPEX 三大法人：{len(result)} 支')
+    return result
 
 
 def fetch_tpex_price(trade_date: str) -> dict:
@@ -111,45 +164,68 @@ def scrape_tpex_date(trade_date: str, session) -> int:
     """
     爬取 TPEX 單一交易日，更新或新增資料庫
     trade_date: YYYYMMDD
+    資料優先順序：三大法人 > 收盤價 > 融資融券
     """
     from db.schema import ChipDaily
     from datetime import datetime
 
+    inst   = fetch_tpex_institutional(trade_date)
+    time.sleep(DELAY)
     price  = fetch_tpex_price(trade_date)
     time.sleep(DELAY)
     margin = fetch_tpex_margin(trade_date)
 
-    if not price:
-        log.warning(f'  {trade_date} TPEX 無收盤價資料，跳過')
+    if not price and not inst:
+        log.warning(f'  {trade_date} TPEX 無資料，跳過')
         return 0
 
     dt = datetime.strptime(trade_date, '%Y%m%d').date()
     count = 0
 
-    for sid, close in price.items():
+    # 以三大法人或收盤價的聯集作為股票清單
+    all_sids = set(inst.keys()) | set(price.keys())
+
+    for sid in all_sids:
         try:
             exists = session.query(ChipDaily).filter_by(date=dt, stock_id=sid).first()
         except Exception:
             session.rollback()
             exists = session.query(ChipDaily).filter_by(date=dt, stock_id=sid).first()
+
+        close = price.get(sid)
+        mg    = margin.get(sid, {})
+        d     = inst.get(sid, {})
+
         if exists:
-            # 更新收盤價和融資融券
-            exists.close_price = close
-            mg = margin.get(sid, {})
+            # 更新三大法人（如果有）
+            if d:
+                exists.foreign_buy  = d['foreign_buy']
+                exists.foreign_sell = d['foreign_sell']
+                exists.foreign_net  = d['foreign_net']
+                exists.trust_buy    = d['trust_buy']
+                exists.trust_sell   = d['trust_sell']
+                exists.trust_net    = d['trust_net']
+                exists.dealer_net   = d['dealer_net']
+                exists.inst_net     = d['inst_net']
+            if close is not None:
+                exists.close_price = close
             if mg:
                 exists.margin_balance = mg['margin_balance']
                 exists.short_balance  = mg['short_balance']
         else:
-            # 新增上櫃股票記錄（無三大法人資料，填 0）
-            mg = margin.get(sid, {})
             row = ChipDaily(
                 date=dt,
                 stock_id=sid,
-                foreign_buy=0, foreign_sell=0, foreign_net=0,
-                trust_buy=0,   trust_sell=0,   trust_net=0,
-                dealer_net=0,  inst_net=0,
+                foreign_buy=d.get('foreign_buy', 0),
+                foreign_sell=d.get('foreign_sell', 0),
+                foreign_net=d.get('foreign_net', 0),
+                trust_buy=d.get('trust_buy', 0),
+                trust_sell=d.get('trust_sell', 0),
+                trust_net=d.get('trust_net', 0),
+                dealer_net=d.get('dealer_net', 0),
+                inst_net=d.get('inst_net', 0),
                 margin_balance=mg.get('margin_balance', 0),
-                short_balance= mg.get('short_balance', 0),
+                short_balance=mg.get('short_balance', 0),
                 close_price=close,
             )
             session.add(row)
@@ -161,7 +237,7 @@ def scrape_tpex_date(trade_date: str, session) -> int:
         session.rollback()
         log.error(f'  TPEX {trade_date} commit 失敗: {e}')
         return 0
-    log.info(f'  TPEX {trade_date} 新增 {count} 筆，更新收盤價 {len(price)} 支')
+    log.info(f'  TPEX {trade_date} 新增 {count} 筆，三大法人 {len(inst)} 支，收盤價 {len(price)} 支')
     return count
 
 
