@@ -10,6 +10,14 @@ from datetime import date
 
 app = FastAPI(title="FlowIQ — 台股籌碼分析平台", version="0.1.0")
 
+
+@app.on_event("startup")
+def startup():
+    """啟動時自動建立資料表"""
+    from db.schema import init_db
+    init_db()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
