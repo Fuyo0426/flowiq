@@ -17,7 +17,8 @@ export default function LoginPage() {
     setLoading(true)
     setError('')
     try {
-      const res = await fetch('http://localhost:8000/api/dates', {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const res = await fetch(`${apiBase}/api/dates`, {
         headers: { Authorization: getAuthHeader(user, pass) },
       })
       if (!res.ok) throw new Error('帳號或密碼錯誤')
