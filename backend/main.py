@@ -472,8 +472,12 @@ def get_stock_stats(
     latest = rows[-1]
     three_same = latest["foreign_net"] > 0 and latest["trust_net"] > 0 and latest["dealer_net"] > 0
 
+    stock_info = run_query(db, "SELECT name, market FROM stocks WHERE stock_id = ?", [stock_id])
+    market = stock_info[0]["market"] if stock_info else "TWSE"
+
     return {
         "stock_id": stock_id,
+        "market": market,
         "latest_date": rows[-1]["date"],
         "latest_price": prices[-1] if prices else None,
         "consec_buy": consec_buy,

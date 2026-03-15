@@ -12,6 +12,7 @@ import {
   ArrowLeft, TrendUp, TrendDown, Lightning, Users,
 } from '@phosphor-icons/react'
 import AppNav from '@/components/AppNav'
+import TradingViewChart from '@/components/TradingViewChart'
 import {
   getStoredAuth, clearAuth, fetchChip, fetchStockStats, fetchStocks,
   type ChipRow, type StockStats, fmt, fmtPct, fmtZ,
@@ -469,6 +470,24 @@ export default function StockDetailPage() {
                 />
               </ComposedChart>
             </ResponsiveContainer>
+          </motion.div>
+        )}
+
+        {/* TradingView Chart */}
+        {!loading && stats && (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            className="bg-white rounded-2xl border border-zinc-200/60 p-6"
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-medium text-zinc-700">TradingView 技術分析</h3>
+              <span className="text-xs text-zinc-400 font-mono">
+                {stats.market}:{id} · RSI · MACD
+              </span>
+            </div>
+            <TradingViewChart stockId={id} market={stats.market || 'TWSE'} />
           </motion.div>
         )}
 

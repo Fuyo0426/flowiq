@@ -70,6 +70,7 @@ export interface SignalRow {
 
 export interface StockStats {
   stock_id: string
+  market: string
   latest_date: string
   latest_price: number | null
   consec_buy: number
