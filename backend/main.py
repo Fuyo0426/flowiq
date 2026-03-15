@@ -33,108 +33,6 @@ def admin_init_db():
         return {"status": "error", "detail": str(e)}
 
 
-def _run_stock_upsert(db, stock_id: str, name: str, market: str):
-    """INSERT OR REPLACE / ON CONFLICT 跨資料庫寫入 stocks 表"""
-    if DATABASE_URL:
-        cur = db.cursor()
-        cur.execute(
-            "INSERT INTO stocks (stock_id, name, market) VALUES (%s, %s, %s) "
-            "ON CONFLICT (stock_id) DO UPDATE SET name = EXCLUDED.name, market = EXCLUDED.market",
-            [stock_id, name, market],
-        )
-    else:
-        db.execute(
-            "INSERT OR REPLACE INTO stocks (stock_id, name, market) VALUES (?, ?, ?)",
-            [stock_id, name, market],
-        )
-
-
-@app.get("/admin/sync-stocks")
-def admin_sync_stocks(db=Depends(get_db)):
-    """
-    從 TWSE T86 + TPEX 3itrade 抓取股票名稱，寫入 stocks 表。
-    首次建立資料後執行一次即可；之後每日爬蟲會自動維護。
-    """
-    import urllib.request, json, ssl, time, logging
-
-    log = logging.getLogger(__name__)
-
-    SSL_CTX = ssl.create_default_context()
-    SSL_CTX.check_hostname = False
-    SSL_CTX.verify_mode = ssl.CERT_NONE
-    HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-
-    def _fetch(url: str):
-        req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as r:
-            return json.loads(r.read().decode("utf-8"))
-
-    def _fetch_big5(url: str):
-        req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as r:
-            raw = r.read()
-        try:
-            return json.loads(raw.decode("big5", errors="replace"))
-        except Exception:
-            return json.loads(raw.decode("utf-8", errors="replace"))
-
-    try:
-        latest = run_scalar(db, "SELECT MAX(date) FROM chip_daily")
-        if not latest:
-            return {"status": "error", "detail": "chip_daily 無資料，請先爬取資料"}
-
-        trade_date = str(latest).replace("-", "")
-        names: dict[str, tuple[str, str]] = {}  # {stock_id: (name, market)}
-
-        # ── TWSE T86 ──────────────────────────────────────────────────────────
-        try:
-            url = f"https://www.twse.com.tw/fund/T86?response=json&date={trade_date}&selectType=ALL"
-            data = _fetch(url)
-            if data.get("stat") == "OK":
-                for row in data.get("data", []):
-                    sid = str(row[0]).strip()
-                    name = str(row[1]).strip()
-                    if sid and name:
-                        names[sid] = (name, "TWSE")
-            log.info(f"[sync-stocks] TWSE: {len(names)} 支")
-        except Exception as e:
-            log.warning(f"[sync-stocks] TWSE 失敗: {e}")
-
-        time.sleep(2)
-
-        # ── TPEX 3itrade ──────────────────────────────────────────────────────
-        try:
-            y = int(trade_date[:4]) - 1911
-            roc = f"{y}%2F{trade_date[4:6]}%2F{trade_date[6:8]}"
-            url = (
-                f"https://www.tpex.org.tw/web/stock/3insti/daily_trade/"
-                f"3itrade_hedge_result.php?l=zh-tw&t=D&d={roc}&response=json"
-            )
-            data = _fetch_big5(url)
-            tpex_count = 0
-            for table in data.get("tables", []):
-                for row in table.get("data", []):
-                    if isinstance(row, list) and len(row) >= 2:
-                        sid = str(row[0]).strip()
-                        name = str(row[1]).strip()
-                        if sid and name and sid not in names:
-                            names[sid] = (name, "TPEX")
-                            tpex_count += 1
-            log.info(f"[sync-stocks] TPEX: {tpex_count} 支")
-        except Exception as e:
-            log.warning(f"[sync-stocks] TPEX 失敗: {e}")
-
-        # ── Upsert to stocks table ────────────────────────────────────────────
-        for sid, (name, market) in names.items():
-            _run_stock_upsert(db, sid, name, market)
-
-        db.commit()
-        return {"status": "ok", "synced": len(names), "latest_date": trade_date}
-
-    except Exception as e:
-        return {"status": "error", "detail": str(e)}
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -196,6 +94,102 @@ def run_scalar(db, sql: str, params=None):
         import sqlite3
         row = db.execute(sql, params).fetchone()
         return row[0] if row else None
+
+
+# ── Stock upsert helper ───────────────────────────────────────────────────────
+def _run_stock_upsert(db, stock_id: str, name: str, market: str):
+    """INSERT OR REPLACE / ON CONFLICT 跨資料庫寫入 stocks 表"""
+    if DATABASE_URL:
+        cur = db.cursor()
+        cur.execute(
+            "INSERT INTO stocks (stock_id, name, market) VALUES (%s, %s, %s) "
+            "ON CONFLICT (stock_id) DO UPDATE SET name = EXCLUDED.name, market = EXCLUDED.market",
+            [stock_id, name, market],
+        )
+    else:
+        db.execute(
+            "INSERT OR REPLACE INTO stocks (stock_id, name, market) VALUES (?, ?, ?)",
+            [stock_id, name, market],
+        )
+
+
+@app.get("/admin/sync-stocks")
+def admin_sync_stocks(db=Depends(get_db)):
+    """從 TWSE T86 + TPEX 3itrade 抓取股票名稱，寫入 stocks 表"""
+    import urllib.request, json, ssl, time, logging
+
+    log = logging.getLogger(__name__)
+    SSL_CTX = ssl.create_default_context()
+    SSL_CTX.check_hostname = False
+    SSL_CTX.verify_mode = ssl.CERT_NONE
+    HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    def _fetch(url: str):
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as r:
+            return json.loads(r.read().decode("utf-8"))
+
+    def _fetch_big5(url: str):
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=20, context=SSL_CTX) as r:
+            raw = r.read()
+        try:
+            return json.loads(raw.decode("big5", errors="replace"))
+        except Exception:
+            return json.loads(raw.decode("utf-8", errors="replace"))
+
+    try:
+        latest = run_scalar(db, "SELECT MAX(date) FROM chip_daily")
+        if not latest:
+            return {"status": "error", "detail": "chip_daily 無資料，請先爬取資料"}
+
+        trade_date = str(latest).replace("-", "")
+        names: dict[str, tuple[str, str]] = {}
+
+        try:
+            url = f"https://www.twse.com.tw/fund/T86?response=json&date={trade_date}&selectType=ALL"
+            data = _fetch(url)
+            if data.get("stat") == "OK":
+                for row in data.get("data", []):
+                    sid = str(row[0]).strip()
+                    nm = str(row[1]).strip()
+                    if sid and nm:
+                        names[sid] = (nm, "TWSE")
+            log.info(f"[sync-stocks] TWSE: {len(names)} 支")
+        except Exception as e:
+            log.warning(f"[sync-stocks] TWSE 失敗: {e}")
+
+        time.sleep(2)
+
+        try:
+            y = int(trade_date[:4]) - 1911
+            roc = f"{y}%2F{trade_date[4:6]}%2F{trade_date[6:8]}"
+            url = (
+                f"https://www.tpex.org.tw/web/stock/3insti/daily_trade/"
+                f"3itrade_hedge_result.php?l=zh-tw&t=D&d={roc}&response=json"
+            )
+            data = _fetch_big5(url)
+            tpex_count = 0
+            for table in data.get("tables", []):
+                for row in table.get("data", []):
+                    if isinstance(row, list) and len(row) >= 2:
+                        sid = str(row[0]).strip()
+                        nm = str(row[1]).strip()
+                        if sid and nm and sid not in names:
+                            names[sid] = (nm, "TPEX")
+                            tpex_count += 1
+            log.info(f"[sync-stocks] TPEX: {tpex_count} 支")
+        except Exception as e:
+            log.warning(f"[sync-stocks] TPEX 失敗: {e}")
+
+        for sid, (nm, market) in names.items():
+            _run_stock_upsert(db, sid, nm, market)
+
+        db.commit()
+        return {"status": "ok", "synced": len(names), "latest_date": trade_date}
+
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
