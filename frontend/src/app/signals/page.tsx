@@ -205,8 +205,9 @@ function SignalCard({
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-2">
           <StrengthDot light={row.light} />
-          <span className="font-mono font-bold text-lg text-zinc-900">{row.stock_id}</span>
-          <span className="text-zinc-500 text-sm ml-0.5">{stockName}</span>
+          <span className="font-mono font-bold text-lg text-zinc-900">
+            {row.stock_id}{stockName ? `(${stockName})` : ''}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -379,10 +380,9 @@ function SectorSummary({ data, stockNames }: { data: SignalRow[]; stockNames: Re
           </div>
           <div className="flex items-center gap-2 mb-2">
             <StrengthDot light={topStock.light} />
-            <span className="font-mono font-bold text-lg text-zinc-900">{topStock.stock_id}</span>
-            {stockNames[topStock.stock_id] && (
-              <span className="text-sm text-zinc-500">{stockNames[topStock.stock_id]}</span>
-            )}
+            <span className="font-mono font-bold text-lg text-zinc-900">
+              {topStock.stock_id}{stockNames[topStock.stock_id] ? `(${stockNames[topStock.stock_id]})` : ''}
+            </span>
             <span className="bg-zinc-900 text-white text-xs font-mono px-2 py-0.5 rounded-md ml-auto">
               {topStock.score}
             </span>

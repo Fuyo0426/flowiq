@@ -293,10 +293,9 @@ export default function StockDetailPage() {
             animate={{ opacity: 1, y: 0 }}
             className="flex items-baseline gap-4 flex-wrap"
           >
-            <h1 className="font-mono text-3xl font-bold text-zinc-900 tracking-tight">{id}</h1>
-            {stockName && (
-              <span className="text-lg text-zinc-500">{stockName}</span>
-            )}
+            <h1 className="font-mono text-3xl font-bold text-zinc-900 tracking-tight">
+              {id}{stockName ? `(${stockName})` : ''}
+            </h1>
             {stats.latest_price != null && (
               <span className="font-mono text-xl text-zinc-700">
                 NT$ {stats.latest_price.toFixed(1)}

@@ -240,12 +240,9 @@ export default function WatchlistPage() {
 
                     <Link href={`/stock/${id}`} className="block">
                       <div className="flex items-center justify-between mb-3">
-                        <div>
-                          <span className="num text-lg font-bold text-zinc-900">{id}</span>
-                          {stockNames[id] && (
-                            <span className="text-sm text-zinc-500 ml-1.5">{stockNames[id]}</span>
-                          )}
-                        </div>
+                        <span className="num text-lg font-bold text-zinc-900">
+                          {id}{stockNames[id] ? `(${stockNames[id]})` : ''}
+                        </span>
                         {card && !card.loading && (
                           <Sparkline values={card.prices} />
                         )}

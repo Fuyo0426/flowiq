@@ -358,11 +358,8 @@ export default function PerformancePage() {
                             className={i % 2 === 0 ? 'bg-white' : 'bg-zinc-50/50'}
                           >
                             <td className="num px-4 py-2.5 text-zinc-400 text-xs">{i + 1}</td>
-                            <td className="px-4 py-2.5">
-                              <span className="num text-zinc-900 font-medium">{s.stock_id}</span>
-                              {stockNames[s.stock_id] && (
-                                <span className="text-xs text-zinc-400 ml-1.5">{stockNames[s.stock_id]}</span>
-                              )}
+                            <td className="num px-4 py-2.5 text-zinc-900 font-medium">
+                              {s.stock_id}{stockNames[s.stock_id] ? `(${stockNames[s.stock_id]})` : ''}
                             </td>
                             <td className="px-4 py-2.5">
                               <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-xs font-medium">

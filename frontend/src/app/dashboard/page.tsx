@@ -137,10 +137,9 @@ export default function DashboardPage() {
                       className={`grid grid-cols-[minmax(100px,1.2fr)_1fr_1fr_1fr_1fr_70px] gap-2 px-5 py-3 border-b border-zinc-100 cursor-pointer hover:bg-blue-50/60 transition ${selected === row.stock_id ? 'bg-blue-50' : ''}`}
                     >
                       <span className="flex items-center gap-1.5 min-w-0">
-                        <span className="num text-sm font-medium text-zinc-700">{row.stock_id}</span>
-                        {stockNames[row.stock_id] && (
-                          <span className="text-xs text-zinc-400 truncate">{stockNames[row.stock_id]}</span>
-                        )}
+                        <span className="num text-sm font-medium text-zinc-700">
+                          {row.stock_id}{stockNames[row.stock_id] ? `(${stockNames[row.stock_id]})` : ''}
+                        </span>
                       </span>
                       <NetBadge value={row.inst_net} />
                       <NetBadge value={row.foreign_net} />
@@ -169,10 +168,9 @@ export default function DashboardPage() {
               <>
                 <div className="flex items-baseline justify-between mb-1">
                   <div className="flex items-baseline gap-2">
-                    <span className="num text-2xl font-bold text-zinc-900 tracking-tight">{selected}</span>
-                    {stockNames[selected] && (
-                      <span className="text-sm text-zinc-500">{stockNames[selected]}</span>
-                    )}
+                    <span className="num text-2xl font-bold text-zinc-900 tracking-tight">
+                      {selected}{stockNames[selected] ? `(${stockNames[selected]})` : ''}
+                    </span>
                   </div>
                   {detail[detail.length - 1]?.close_price && (
                     <span className="num text-lg text-zinc-600">
