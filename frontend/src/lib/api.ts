@@ -147,3 +147,20 @@ export function fmtZ(z: number) {
   const sign = z >= 0 ? '+' : ''
   return `${sign}${z.toFixed(1)}\u03C3`
 }
+
+export interface AccuracyResult {
+  sample_size: number
+  date_range: { from: string; to: string }
+  overall_win_rate: number
+  by_type: Array<{
+    type: string
+    label: string
+    win_rate: number
+    count: number
+    avg_return: number
+  }>
+}
+
+export async function fetchAccuracy(auth: { user: string; pass: string }) {
+  return apiFetch('/api/signals/accuracy', auth) as Promise<AccuracyResult>
+}

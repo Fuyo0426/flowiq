@@ -5,21 +5,75 @@ FlowIQ — 台股籌碼分析平台 — FastAPI 後端
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.middleware.cors import CORSMiddleware
-import secrets, os, math
+from contextlib import asynccontextmanager
+import secrets, os, math, logging
 from datetime import date
 
-app = FastAPI(title="FlowIQ — 台股籌碼分析平台", version="0.1.0")
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
+
+try:
+    from scrapers.backfill_10y import fetch_twse_day, fetch_tpex_day, write_to_db as _write_to_db
+    _scrapers_available = True
+except Exception as _scraper_import_err:
+    logging.warning(f"[scheduler] scrapers import failed, daily scrape disabled: {_scraper_import_err}")
+    _scrapers_available = False
 
 
-@app.on_event("startup")
-def startup():
-    """啟動時自動建立資料表"""
-    import logging
+def run_daily_scrape():
+    """每日自動爬取：17:00 台北時間 平日執行"""
+    _log = logging.getLogger(__name__)
+    try:
+        from datetime import datetime
+        trade_date = datetime.now().strftime("%Y%m%d")
+        _log.info(f"[scheduler] run_daily_scrape start — {trade_date}")
+        twse_data = fetch_twse_day(trade_date)
+        tpex_data = fetch_tpex_day(trade_date)
+        _write_to_db(trade_date, twse_data, tpex_data)
+        _log.info(f"[scheduler] run_daily_scrape success — {trade_date}")
+    except Exception as e:
+        logging.error(f"[scheduler] run_daily_scrape failed: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── startup ──────────────────────────────────────────────────────────────
+    _log = logging.getLogger(__name__)
+
+    # 初始化資料表
     try:
         from db.schema import init_db
         init_db()
     except Exception as e:
-        logging.error(f"[startup] init_db failed: {e}")
+        _log.error(f"[startup] init_db failed: {e}")
+
+    # 啟動 APScheduler（平日 17:00 台北時間自動爬取）
+    scheduler = None
+    if _scrapers_available:
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+            scheduler = BackgroundScheduler(timezone="Asia/Taipei")
+            scheduler.add_job(run_daily_scrape, "cron", day_of_week="mon-fri", hour=17, minute=0)
+            scheduler.start()
+            _log.info("[scheduler] APScheduler started — daily scrape at 17:00 Asia/Taipei (Mon-Fri)")
+        except Exception as e:
+            _log.error(f"[scheduler] APScheduler start failed: {e}")
+            scheduler = None
+    else:
+        _log.warning("[scheduler] scrapers not available, APScheduler not started")
+
+    yield
+
+    # ── shutdown ─────────────────────────────────────────────────────────────
+    if scheduler is not None:
+        try:
+            scheduler.shutdown()
+            _log.info("[scheduler] APScheduler shut down")
+        except Exception as e:
+            _log.error(f"[scheduler] shutdown error: {e}")
+
+
+app = FastAPI(title="FlowIQ — 台股籌碼分析平台", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/admin/init-db")
@@ -417,6 +471,142 @@ def get_signals(
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return {"date": latest, "data": results[:top]}
+
+
+@app.get("/api/signals/accuracy")
+def get_signals_accuracy(
+    user: str = Depends(auth),
+    db=Depends(get_db),
+):
+    """歷史訊號勝率分析 — 法人買超後 5 個交易日報酬回測"""
+
+    SIGNAL_LABELS = {
+        "triple_arrow": "三箭齊發",
+        "stealth_entry": "悄悄進場",
+        "trust_push": "投信推力",
+        "normal": "一般",
+    }
+
+    def _classify(row) -> str:
+        fn = row.get("foreign_net", 0) or 0
+        tn = row.get("trust_net", 0) or 0
+        dn = row.get("dealer_net", 0) or 0
+        if fn > 0 and tn > 0 and dn > 0:
+            return "triple_arrow"
+        if fn > 0 and tn <= 0:
+            return "stealth_entry"
+        if fn > 0 and tn > 0 and dn <= 0:
+            return "trust_push"
+        return "normal"
+
+    if DATABASE_URL:
+        # ── PostgreSQL: LEAD 視窗函數 ─────────────────────────────────────
+        try:
+            import psycopg2
+            import psycopg2.extras
+            cur = db.cursor()
+            cur.execute("""
+                SELECT
+                    cd.stock_id,
+                    cd.date,
+                    cd.inst_net,
+                    cd.foreign_net,
+                    cd.trust_net,
+                    cd.dealer_net,
+                    cd.close_price AS entry_price,
+                    cd.margin_balance,
+                    LEAD(cd.close_price, 5) OVER (
+                        PARTITION BY cd.stock_id ORDER BY cd.date
+                    ) AS exit_price
+                FROM chip_daily cd
+                WHERE cd.inst_net > 0
+                  AND cd.close_price IS NOT NULL
+                  AND cd.close_price > 0
+                ORDER BY cd.date DESC
+                LIMIT 5000
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"DB query failed: {e}")
+    else:
+        # ── SQLite fallback: 逐股票 Python 計算 ──────────────────────────
+        try:
+            all_rows = run_query(db, """
+                SELECT stock_id, date, inst_net, foreign_net, trust_net,
+                       dealer_net, close_price, margin_balance
+                FROM chip_daily
+                WHERE inst_net > 0 AND close_price IS NOT NULL AND close_price > 0
+                ORDER BY stock_id, date ASC
+            """)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"DB query failed: {e}")
+
+        from collections import defaultdict
+        by_stock: dict = defaultdict(list)
+        for r in all_rows:
+            by_stock[r["stock_id"]].append(r)
+
+        rows = []
+        for sid, stock_rows in by_stock.items():
+            for i, r in enumerate(stock_rows):
+                exit_price = stock_rows[i + 5]["close_price"] if i + 5 < len(stock_rows) else None
+                rows.append({**r, "entry_price": r["close_price"], "exit_price": exit_price})
+
+        # limit to 5000 most recent
+        rows = sorted(rows, key=lambda x: x["date"], reverse=True)[:5000]
+
+    # ── Python 計算勝率 ───────────────────────────────────────────────────
+    from collections import defaultdict
+
+    type_stats: dict = defaultdict(lambda: {"wins": 0, "total": 0, "returns": []})
+    valid_dates = []
+
+    for r in rows:
+        entry = r.get("entry_price")
+        exit_ = r.get("exit_price")
+        if entry is None or exit_ is None or entry <= 0:
+            continue
+
+        sig = _classify(r)
+        ret_pct = (exit_ - entry) / entry * 100
+        is_win = exit_ > entry
+
+        type_stats[sig]["total"] += 1
+        if is_win:
+            type_stats[sig]["wins"] += 1
+        type_stats[sig]["returns"].append(ret_pct)
+
+        d = str(r.get("date", ""))
+        if d:
+            valid_dates.append(d)
+
+    sample_size = sum(s["total"] for s in type_stats.values())
+    date_from = min(valid_dates) if valid_dates else None
+    date_to = max(valid_dates) if valid_dates else None
+
+    total_wins = sum(s["wins"] for s in type_stats.values())
+    overall_wr = round(total_wins / sample_size * 100, 1) if sample_size > 0 else 0.0
+
+    by_type = []
+    for sig_type in ["triple_arrow", "stealth_entry", "trust_push", "normal"]:
+        s = type_stats.get(sig_type, {"wins": 0, "total": 0, "returns": []})
+        cnt = s["total"]
+        wr = round(s["wins"] / cnt * 100, 1) if cnt > 0 else 0.0
+        avg_ret = round(sum(s["returns"]) / len(s["returns"]), 2) if s["returns"] else 0.0
+        by_type.append({
+            "type": sig_type,
+            "label": SIGNAL_LABELS[sig_type],
+            "win_rate": wr,
+            "count": cnt,
+            "avg_return": avg_ret,
+        })
+
+    return {
+        "sample_size": sample_size,
+        "date_range": {"from": date_from, "to": date_to},
+        "overall_win_rate": overall_wr,
+        "by_type": by_type,
+    }
 
 
 @app.get("/api/stock/{stock_id}/stats")

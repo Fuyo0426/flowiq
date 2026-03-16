@@ -9,8 +9,8 @@ import {
   AreaChart, Area, ReferenceLine,
 } from 'recharts'
 import {
-  getStoredAuth, clearAuth, fetchSignals, fetchStocks,
-  type SignalRow, fmtPct, fmtZ, ApiError,
+  getStoredAuth, clearAuth, fetchSignals, fetchStocks, fetchAccuracy,
+  type SignalRow, type AccuracyResult, fmtPct, fmtZ, ApiError,
 } from '@/lib/api'
 import AppNav from '@/components/AppNav'
 
@@ -47,6 +47,7 @@ export default function PerformancePage() {
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [stockNames, setStockNames] = useState<Record<string, string>>({})
+  const [accuracy, setAccuracy] = useState<AccuracyResult | null>(null)
 
   useEffect(() => {
     const stored = getStoredAuth()
@@ -60,11 +61,13 @@ export default function PerformancePage() {
     Promise.all([
       fetchSignals(auth, 100),
       fetchStocks(auth),
+      fetchAccuracy(auth),
     ])
-      .then(([res, names]) => {
+      .then(([res, names, acc]) => {
         setSignals(res.data)
         setSignalDate(res.date)
         setStockNames(names)
+        setAccuracy(acc)
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
@@ -174,7 +177,11 @@ export default function PerformancePage() {
               {[
                 { label: '今日偵測訊號', value: `${totalCount}`, sub: '檔' },
                 { label: '強訊號（紅燈）', value: `${redCount}`, sub: '檔' },
-                { label: '平均異常程度', value: `${avgZscore.toFixed(1)}\u03C3`, sub: 'Top 20' },
+                {
+                  label: '歷史勝率',
+                  value: accuracy ? `${accuracy.overall_win_rate.toFixed(1)}%` : '—',
+                  sub: '半年統計',
+                },
                 { label: '三箭齊發', value: `${tripleArrowCount}`, sub: '檔' },
               ].map((card, i) => (
                 <motion.div
@@ -202,56 +209,73 @@ export default function PerformancePage() {
                 transition={{ delay: 0.1 }}
                 className="bg-white rounded-2xl border border-zinc-200/60 p-6 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.06)]"
               >
-                <h3 className="text-sm font-medium text-zinc-700 mb-4">各訊號類型勝率</h3>
-                {winRateData.length > 0 ? (
-                  <>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart
-                        data={winRateData}
-                        layout="vertical"
-                        margin={{ top: 0, right: 16, left: 16, bottom: 0 }}
-                      >
-                        <XAxis
-                          type="number"
-                          domain={[0, 100]}
-                          tick={{ fontSize: 10, fill: '#a1a1aa' }}
-                          axisLine={false}
-                          tickLine={false}
-                          tickFormatter={v => `${v}%`}
-                        />
-                        <YAxis
-                          type="category"
-                          dataKey="type"
-                          tick={{ fontSize: 12, fill: '#52525b' }}
-                          axisLine={false}
-                          tickLine={false}
-                          width={80}
-                        />
-                        <Tooltip
-                          contentStyle={{
-                            fontSize: 12,
-                            borderRadius: 8,
-                            border: '1px solid #e4e4e7',
-                            boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
-                          }}
-                          formatter={(v: unknown) => [`${Number(v)}%`, '勝率']}
-                        />
-                        <Bar dataKey="winRate" radius={[0, 4, 4, 0]} barSize={20}>
-                          {winRateData.map((entry, i) => (
-                            <Cell key={i} fill={entry.winRate >= 60 ? '#22c55e' : entry.winRate >= 40 ? '#eab308' : '#ef4444'} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                    <p className="text-xs text-zinc-400 mt-3">
-                      * 勝率基於近期 {signals.length} 個訊號資料計算，建議累積更多歷史資料以提高可靠性
-                    </p>
-                  </>
+                <h3 className="text-sm font-medium text-zinc-700 mb-1">各訊號類型勝率</h3>
+                {accuracy ? (
+                  <p className="text-xs text-zinc-400 mb-4">
+                    基於 {accuracy.sample_size} 筆歷史訊號（{accuracy.date_range.from} ~ {accuracy.date_range.to}）
+                  </p>
                 ) : (
-                  <div className="h-[200px] flex items-center justify-center text-sm text-zinc-400">
-                    無足夠資料
-                  </div>
+                  <p className="text-xs text-zinc-400 mb-4">今日快照估算</p>
                 )}
+                {(() => {
+                  const chartData = accuracy
+                    ? accuracy.by_type.map(d => ({ type: d.label, winRate: Math.round(d.win_rate), count: d.count }))
+                    : winRateData
+                  return chartData.length > 0 ? (
+                    <>
+                      <ResponsiveContainer width="100%" height={200}>
+                        <BarChart
+                          data={chartData}
+                          layout="vertical"
+                          margin={{ top: 0, right: 16, left: 16, bottom: 0 }}
+                        >
+                          <XAxis
+                            type="number"
+                            domain={[0, 100]}
+                            tick={{ fontSize: 10, fill: '#a1a1aa' }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={v => `${v}%`}
+                          />
+                          <YAxis
+                            type="category"
+                            dataKey="type"
+                            tick={{ fontSize: 12, fill: '#52525b' }}
+                            axisLine={false}
+                            tickLine={false}
+                            width={80}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              fontSize: 12,
+                              borderRadius: 8,
+                              border: '1px solid #e4e4e7',
+                              boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
+                            }}
+                            formatter={(v: unknown, _name: unknown, props: { payload?: { count?: number } }) => [
+                              `${Number(v)}%（${props.payload?.count ?? ''} 筆）`,
+                              '勝率',
+                            ]}
+                          />
+                          <Bar dataKey="winRate" radius={[0, 4, 4, 0]} barSize={20}>
+                            {chartData.map((entry, i) => (
+                              <Cell key={i} fill={entry.winRate >= 60 ? '#22c55e' : entry.winRate >= 40 ? '#eab308' : '#ef4444'} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                      {!accuracy && (
+                        <p className="text-xs text-zinc-400 mt-3">
+                          * 勝率基於近期 {signals.length} 個訊號資料計算，建議累積更多歷史資料以提高可靠性
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <div className="h-[200px] flex items-center justify-center text-sm text-zinc-400">
+                      無足夠資料
+                    </div>
+                  )
+                })()}
               </motion.div>
 
               {/* Z-score Distribution */}
@@ -298,6 +322,59 @@ export default function PerformancePage() {
                 </ResponsiveContainer>
               </motion.div>
             </div>
+
+            {/* Historical Accuracy Summary Table */}
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.18 }}
+              className="bg-white rounded-2xl border border-zinc-200/60 overflow-hidden shadow-[0_4px_24px_-8px_rgba(0,0,0,0.06)] mb-6"
+            >
+              <div className="px-5 py-3 border-b border-zinc-100 bg-zinc-50">
+                <span className="text-xs font-medium text-zinc-500">訊號歷史勝率（5日持有）</span>
+                <p className="text-xs text-zinc-400 mt-0.5">基於半年籌碼數據驗證，勝率 &gt;55% 為有效訊號</p>
+              </div>
+              {accuracy ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-zinc-100">
+                        <th className="px-5 py-2.5 text-left text-xs font-medium text-zinc-500">訊號類型</th>
+                        <th className="px-5 py-2.5 text-right text-xs font-medium text-zinc-500">樣本數</th>
+                        <th className="px-5 py-2.5 text-right text-xs font-medium text-zinc-500">勝率</th>
+                        <th className="px-5 py-2.5 text-right text-xs font-medium text-zinc-500">平均漲幅</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {accuracy.by_type.map((row, i) => (
+                        <tr key={row.type} className={i % 2 === 0 ? 'bg-white' : 'bg-zinc-50/50'}>
+                          <td className="px-5 py-2.5 text-zinc-700 font-medium text-sm">{row.label}</td>
+                          <td className="num px-5 py-2.5 text-right text-zinc-500 text-sm">{row.count}</td>
+                          <td className="num px-5 py-2.5 text-right font-semibold text-sm">
+                            <span className={
+                              row.win_rate >= 60 ? 'text-green-600' :
+                              row.win_rate >= 50 ? 'text-amber-600' :
+                              'text-red-500'
+                            }>
+                              {row.win_rate.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className={`num px-5 py-2.5 text-right text-sm font-medium ${row.avg_return >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                            {row.avg_return >= 0 ? '+' : ''}{row.avg_return.toFixed(1)}%
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="px-5 py-4 space-y-2">
+                  {[1, 2, 3, 4].map(n => (
+                    <div key={n} className="h-8 bg-zinc-100 rounded-lg animate-pulse" />
+                  ))}
+                </div>
+              )}
+            </motion.div>
 
             {/* Recent Signals Tracking Table */}
             <motion.div
