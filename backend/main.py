@@ -139,7 +139,7 @@ def admin_sync_stocks(db=Depends(get_db)):
             return json.loads(raw.decode("utf-8", errors="replace"))
 
     try:
-        latest = run_scalar(db, "SELECT MAX(date) FROM chip_daily")
+        latest = run_scalar(db, "SELECT MAX(date) FROM chip_daily WHERE inst_net != 0")
         if not latest:
             return {"status": "error", "detail": "chip_daily 無資料，請先爬取資料"}
 
@@ -271,7 +271,7 @@ def get_summary(
     db=Depends(get_db),
 ):
     if not date_str:
-        date_str = run_scalar(db, "SELECT MAX(date) FROM chip_daily")
+        date_str = run_scalar(db, "SELECT MAX(date) FROM chip_daily WHERE inst_net != 0")
 
     rows = run_query(db, """
         SELECT date, stock_id, inst_net, foreign_net, trust_net,
@@ -305,7 +305,7 @@ def get_signals(
     db=Depends(get_db),
 ):
     """T2 訊號排行 — Z-score 異常偵測 + 法人一致性加權"""
-    latest = run_scalar(db, "SELECT MAX(date) FROM chip_daily")
+    latest = run_scalar(db, "SELECT MAX(date) FROM chip_daily WHERE inst_net != 0")
     if not latest:
         return {"date": None, "data": []}
 
